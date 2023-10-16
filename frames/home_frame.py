@@ -1,13 +1,13 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
-from handle_code import handle_x
+from handle_code import location_handle,dowload_handle,trends_handle,post_handle
 import openpyxl
 from tkinter import filedialog
 import os
-
+import concurrent.futures
 file_Path = ""
-
+import threading
 def create_home_frame(container):
     save_media_var = tk.IntVar()
     home_frame = tk.Frame(container)
@@ -18,9 +18,10 @@ def create_home_frame(container):
 
     # Tạo nút "Lấy các hashtag"
     def change_loc():
-        messagebox.showinfo("Thông báo", "Chọn vị trí trên trình duyệt")
-        handle_x.change_location()
-        messagebox.showinfo("Thông báo", "Đã đổi vị trí")
+        if location_handle.change_location():
+            messagebox.showinfo("Thông báo", "Đã đổi vị trí")
+        else:
+            messagebox.showinfo("Thông báo", "Đổi vị trí thất bại")
         
         
     Location_button = tk.Button(hashtag_frame, text="Đổi location", command=change_loc)
@@ -39,7 +40,7 @@ def create_home_frame(container):
     
     listbox.bind("<Delete>", delete_item_listBox)
     def add_to_listbox():
-        List = handle_x.get_Trends()
+        List = trends_handle.get_Trends()
         for tag in List:
                 if tag[0]:
                     if tag[0] not in listbox.get(0, "end"):
@@ -76,7 +77,9 @@ def create_home_frame(container):
     entry_number.focus_set()
     # Định nghĩa font với kích thước 14
     custom_font = ("Arial", 12)
-
+    def on_mouse_scroll(event):
+        delta = -event.delta  # Lấy giá trị scroll delta và đảo ngược nó để đảm bảo hướng cuộn đúng
+        table.yview_scroll(delta, "units")
     # Thiết lập font cho mục trong listbox
     listbox.configure(font=custom_font)
     def on_listbox_select(event):
@@ -88,24 +91,31 @@ def create_home_frame(container):
     def start_button_cmd():
         hashtag_text = entry_hashtag.get()
         number_text = entry_number.get()
-        hashtag_text = hashtag_text.replace('@', '%40').replace('#', '%23').replace('%', '%25')
         if not hashtag_text or not number_text:
             messagebox.showinfo("Thông báo", f"Không được bỏ trống các trường")
         else:
-            List = handle_x.Get_n_Post_By_Input_Trend(hashtag_text,int(number_text))
+            List = post_handle.Get_n_Post_By_Input_Trend(hashtag_text,int(number_text))
             add_data_to_table(List)
     start_button = tk.Button(posts_frame, text="Lấy n bài viết của Hashtag đã chọn", command=start_button_cmd)
     start_button.grid(row=2, column=0, padx=1, pady=1)
     # Button to "Lấy n bài viết"
+    def process_trend(tag, number_text):
+        global List_post
+        List_post.extend(post_handle.Get_n_Post_By_Input_Trend(tag, number_text))
     def get_n_posts_button_cmd():
+        global List_post
+        List_post = []
         number_text = entry_number.get()
-        for i in range(listbox.size()):
-            txt = listbox.get(i).replace('@', '%40').replace('#', '%23').replace('%', '%25')
-            if not txt or not number_text:
-                messagebox.showinfo("Thông báo", f"Không được bỏ trống các trường")
-            else:
-                List = handle_x.Get_n_Post_By_Input_Trend(txt,int(number_text))
-                add_data_to_table(List)
+        if not number_text:
+            messagebox.showinfo("Thông báo", f"Nhập số lượng bài viết muốn lấy")
+        else:   
+            max_threads = 5
+            with concurrent.futures.ThreadPoolExecutor(max_threads) as executor:
+                for i in range(listbox.size()):
+                    j = i
+                    tag = listbox.get(j)
+                    executor.submit(process_trend, tag, int(number_text))
+            add_data_to_table(List_post)
     get_n_posts_button = tk.Button(posts_frame, text="Lấy n bài viết của mỗi Hashtag", command=get_n_posts_button_cmd)
     get_n_posts_button.grid(row=2, column=1, padx=1, pady=1)
 
@@ -135,7 +145,7 @@ def create_home_frame(container):
             error_label.config(text="", foreground="black")
 
     entry_number.bind("<FocusOut>", validate_entry)
-
+    entry_hashtag.bind("<Return>", lambda event=None: add_data_to_listbox())
     # Label để hiển thị thông báo lỗi
     error_label = ttk.Label(posts_frame, text="", font=("Arial", 11))
     error_label.grid(row=3, column=0, columnspan=2, padx=1, pady=1, sticky="w")
@@ -145,7 +155,7 @@ def create_home_frame(container):
     table_frame.place(relx=0.2, rely=0.2, relwidth=0.8, relheight=0.8)
 
     # Create a Treeview widget for the table
-    columns = ("Name","User", "Status", "Tags", "Interactions", "Link")
+    columns = ("Name","User", "Status", "Tags", "Interactions", "Link","Tag")
     table = ttk.Treeview(table_frame, columns=columns, show="headings")
 
     table.pack(fill="both", expand=True)
@@ -163,7 +173,7 @@ def create_home_frame(container):
             tags = ', '.join(item[4])
             link = item[0]
             interactions = "RL: "+item[5]+" RL: "+item[6]," LK: "+item[7]+" W: "+item[8]
-            table.insert("", "end", values=(name,user, status, tags,interactions, link))
+            table.insert("", "end", values=(name,user, status, tags,interactions, link,item[9]))
     def add_tags_from_selected_item():
         selected_item = table.selection()[0]
         if selected_item:
@@ -222,12 +232,13 @@ def create_home_frame(container):
             os.makedirs(video_folder, exist_ok=True)
             
             # Open the folder in File Explorer (works on Windows)
-            
+            link_value =[]
+            name_value = []
             if save_media_var.get() == 1:
                 for item in table.get_children():
-                    link_value = table.item(item, "values")[5] 
-                    name_value = table.item(item, "values")[0]
-                    handle_x.dowload_Video_Or_Photos(link_value,name_value,folder_path)
+                    link_value.append( table.item(item, "values")[5] )
+                    name_value.append( table.item(item, "values")[0])
+                dowload_handle.dowload_Videos_Or_Photos(link_value,name_value,folder_path)
             messagebox.showinfo("Thông báo", f"Dữ liệu đã được xuất ra tệp Excel.\nThư mục lưu: {folder_path}")
             os.startfile(folder_path)
     save_media_var = tk.IntVar()
@@ -246,7 +257,6 @@ def create_home_frame(container):
 
                 for item in data:
                     table.insert("", "end", values=item)
-
                 messagebox.showinfo("Thông báo", f"Dữ liệu đã được nhập từ tệp Excel:\n{file_path}")
 
             except Exception as e:
@@ -266,5 +276,5 @@ def create_home_frame(container):
     save_media_checkbox.pack(side="left", padx=10, pady=5)
     import_excel_button = tk.Button(table_frame, text="Nhập File Excel", command=import_from_excel)
     import_excel_button.pack(side="left", padx=10, pady=5)
-
+    table.bind("<MouseWheel>", on_mouse_scroll)
     return home_frame
